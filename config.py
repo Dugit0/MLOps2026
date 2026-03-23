@@ -1,0 +1,10 @@
+SORT_COLUMN = 'INSR_BEGIN'
+BATCH_SIZE = 1000
+SOURCE_PATH = "data/motor_data11-14lats.csv"
+RAW_DIR = "data/raw"
+PROCESSED_DIR = "data/processed"
+METADATA_DIR = "metadata"
+STATE_FILE = "metadata/stream_state.json"
+MODELS_DIR = "models"
+TARGET = "CLAIM_PAID_BINARY"
+RANDOM_SEED = 42
