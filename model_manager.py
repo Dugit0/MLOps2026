@@ -59,27 +59,34 @@ from datetime import datetime
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import f1_score, accuracy_score, classification_report
+from sklearn.metrics import f1_score, accuracy_score
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 
-from config import *
+# from config import *
+import config
+import os
 
 class ModelManager:
-    def __init__(self, models_dir=MODELS_DIR, metrics_dir=METADATA_DIR):
+    def __init__(self, models_dir=config.MODELS_DIR, metrics_dir=config.METADATA_DIR):
         self.models_dir = models_dir
+        self.latest_models_dir = os.path.join(models_dir, "latest")
+        self.best_model_dir = os.path.join(models_dir, "best")
         self.metrics_dir = metrics_dir
-        self.target = TARGET
+        self.target = config.TARGET
+        self.best_score = -1
         os.makedirs(models_dir, exist_ok=True)
         os.makedirs(metrics_dir, exist_ok=True)
+        os.makedirs(self.latest_models_dir, exist_ok=True)
+        os.makedirs(self.best_model_dir, exist_ok=True)
+
 
     def _get_preprocessor(self, X):
-        """Создание пайплайна предобработки (Пункт 3.a)"""
+        """Создание пайплайна предобработки"""
         numeric_features = X.select_dtypes(include=['int64', 'float64']).columns
         categorical_features = X.select_dtypes(include=['object', 'bool']).columns
-
         preprocessor = ColumnTransformer(
             transformers=[
                 ('num', Pipeline([
@@ -93,32 +100,58 @@ class ModelManager:
             ])
         return preprocessor
 
-    def train_and_evaluate(self, data_path):
-        """Обучение, валидация и выбор лучшей модели"""
-        print(f"Начало этапа обучения на данных: {data_path}")
-        df = pd.read_csv(data_path)
 
-        # Подготовка X и y
-        drop_cols = [self.target, 'INSR_BEGIN', 'INSR_END']
-        X = df.drop(columns=[c for c in drop_cols if c in df.columns])
-        # ---------
-        cat_cols = X.select_dtypes(include=['object', 'bool']).columns
-        for col in cat_cols:
-            X[col] = X[col].astype(str)
-        # ---------
-        y = df[self.target]
+    def save_model(self, model_name, model, results, best=False):
+        """Сохранение модели, обновление симлинков, сохранение метаданных"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_filename = f"model_{model_name}_{timestamp}.pkl"
+        model_path = os.path.join(self.models_dir, model_filename)
+        joblib.dump(model, model_path)
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_SEED)
+        latest_path = os.path.join(self.latest_models_dir, model_filename)
+        os.symlink(model_path, latest_path)
 
-        model_candidates = {
-            "random_forest": RandomForestClassifier(n_estimators=100, max_depth=10, random_state=RANDOM_SEED),
-            "neural_network": MLPClassifier(hidden_layer_sizes=(32, 16), max_iter=500, random_state=RANDOM_SEED)
+        if best:
+            for link in os.listdir(self.best_model_dir):
+                best_path = os.path.join(self.best_model_dir, link)
+                os.remove(best_path)
+            best_path = os.path.join(self.best_model_dir, model_filename)
+            os.symlink(model_path, best_path)
+
+        metrics_path = os.path.join(self.metrics_dir, f"train_metrics_{timestamp}.json")
+        with open(metrics_path, "w") as f:
+            json.dump({
+                "model": model_name,
+                "model_path": model_path,
+                "results": results,
+                "timestamp": timestamp,
+            }, f, indent=4)
+
+
+    def evaluate(self, name, pipeline, X_test, y_test):
+        y_pred = pipeline.predict(X_test)
+        score = f1_score(y_test, y_pred)
+        accur = accuracy_score(y_test, y_pred)
+        results = {
+            "f1_score": score,
+            "accuracy": accur,
         }
+        print(f"--- Модель {name}: F1 = {score:.4f} | Accuracy = {accur:.4f}")
+        return results
 
-        best_score = -1
-        best_model = None
-        best_model_name = ""
-        results = {}
+
+    def _train_new_models(self, X, y):
+        X_train, X_test, y_train, y_test = train_test_split(X, y,
+                                                            test_size=0.2,
+                                                            random_state=config.RANDOM_SEED)
+        model_candidates = {
+            "random_forest": RandomForestClassifier(n_estimators=100,
+                                                    max_depth=10,
+                                                    random_state=config.RANDOM_SEED),
+            "neural_network": MLPClassifier(hidden_layer_sizes=(32, 16),
+                                            max_iter=500,
+                                            random_state=config.RANDOM_SEED)
+        }
 
         preprocessor = self._get_preprocessor(X)
 
@@ -127,46 +160,36 @@ class ModelManager:
                 ('preprocessor', preprocessor),
                 ('classifier', model)
             ])
-
             pipeline.fit(X_train, y_train)
+            results = self.evaluate(name, pipeline, X_test, y_test)
+            score = results['f1_score']
+            self.save_model(name, pipeline, results, best=(score > self.best_score))
+            best_score = max(self.best_score, score)
 
-            y_pred = pipeline.predict(X_test)
-            score = f1_score(y_test, y_pred)
-            accur = accuracy_score(y_test, y_pred)
 
-            results[name] = {
-                "f1_score": score,
-                "accuracy": accuracy_score(y_test, y_pred)
-            }
+    def _update_models(self, X, y):
+        # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=config.RANDOM_SEED)
+        return self._train_new_models(X, y)
 
-            print(f"--- Модель {name}: F1 = {score:.4f} | Accuracy = {accur:.4f}")
 
-            if score > best_score:
-                best_score = score
-                best_model = pipeline
-                best_model_name = name
+    def train_and_evaluate(self, data_path):
+        """Обучение, валидация и сохранение метаданных"""
+        print(f"Начало этапа обучения на данных: {data_path}")
+        df = pd.read_csv(data_path)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_filename = f"model_{best_model_name}_{timestamp}.pkl"
-        model_path = os.path.join(self.models_dir, model_filename)
+        drop_cols = [self.target, 'INSR_BEGIN', 'INSR_END']
+        X = df.drop(columns=[c for c in drop_cols if c in df.columns])
+        cat_cols = X.select_dtypes(include=['object', 'bool']).columns
+        for col in cat_cols:
+            X[col] = X[col].astype(str)
+        y = df[self.target]
 
-        joblib.dump(best_model, model_path)
+        if os.listdir(self.latest_models_dir):
+            self._update_models(X, y)
+        else:
+            self._train_new_models(X, y)
 
-        # Сохраняем ярлык на последнюю лучшую модель
-        joblib.dump(best_model, os.path.join(self.models_dir, "best_model.pkl"))
 
-        # Сохраняем метрики
-        metrics_path = os.path.join(self.metrics_dir, f"train_metrics_{timestamp}.json")
-        with open(metrics_path, "w") as f:
-            json.dump({
-                "best_model": best_model_name,
-                "all_results": results,
-                "timestamp": timestamp,
-                "data_used": data_path
-            }, f, indent=4)
-
-        print(f"Лучшая модель ({best_model_name}) сохранена: {model_path}")
-        return model_path
 
     def predict(self, input_data_path):
         """Инференс (применение модели)"""
