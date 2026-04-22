@@ -7,4 +7,4 @@ METADATA_DIR = "metadata"
 STATE_FILE = "metadata/stream_state.json"
 MODELS_DIR = "models"
 TARGET = "CLAIM_PAID_BINARY"
-RANDOM_SEED = 42
+RANDOM_SEED = 100

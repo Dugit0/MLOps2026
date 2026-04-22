@@ -55,6 +55,7 @@ import os
 import joblib
 import json
 from datetime import datetime
+import glob
 
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
@@ -68,6 +69,7 @@ from sklearn.pipeline import Pipeline
 # from config import *
 import config
 import os
+
 
 class ModelManager:
     def __init__(self, models_dir=config.MODELS_DIR, metrics_dir=config.METADATA_DIR):
@@ -102,7 +104,7 @@ class ModelManager:
 
 
     def save_model(self, model_name, model, results, best=False):
-        """Сохранение модели, обновление симлинков, сохранение метаданных"""
+        """Сохранение модели, обновление симлинков на лучшие модели, сохранение метаданных"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_filename = f"model_{model_name}_{timestamp}.pkl"
         model_path = os.path.join(self.models_dir, model_filename)
@@ -129,6 +131,7 @@ class ModelManager:
 
 
     def evaluate(self, name, pipeline, X_test, y_test):
+        """Оценка качества обученной модели"""
         y_pred = pipeline.predict(X_test)
         score = f1_score(y_test, y_pred)
         accur = accuracy_score(y_test, y_pred)
@@ -136,17 +139,19 @@ class ModelManager:
             "f1_score": score,
             "accuracy": accur,
         }
-        print(f"--- Модель {name}: F1 = {score:.4f} | Accuracy = {accur:.4f}")
+        print(f"[Model manager] --- Модель {name}: F1 = {score:.4f} | Accuracy = {accur:.4f}")
         return results
 
 
     def _train_new_models(self, X, y):
+        """Обучение моделей с нуля"""
         X_train, X_test, y_train, y_test = train_test_split(X, y,
                                                             test_size=0.2,
                                                             random_state=config.RANDOM_SEED)
         model_candidates = {
             "random_forest": RandomForestClassifier(n_estimators=100,
                                                     max_depth=10,
+                                                    warm_start=True,
                                                     random_state=config.RANDOM_SEED),
             "neural_network": MLPClassifier(hidden_layer_sizes=(32, 16),
                                             max_iter=500,
@@ -164,22 +169,49 @@ class ModelManager:
             results = self.evaluate(name, pipeline, X_test, y_test)
             score = results['f1_score']
             self.save_model(name, pipeline, results, best=(score > self.best_score))
-            best_score = max(self.best_score, score)
+            self.best_score = max(self.best_score, score)
 
 
     def _update_models(self, X, y):
-        # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=config.RANDOM_SEED)
-        return self._train_new_models(X, y)
+        """Дообучение существующей модели"""
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=config.RANDOM_SEED
+        )
+        for model_filename in os.listdir(self.latest_models_dir):
+            model_path = os.path.join(self.latest_models_dir, model_filename)
+            model_real_path = os.readlink(model_path)
+            pipeline = joblib.load(model_real_path)
 
+            name = "_".join(model_filename.split('_')[1:-2])
+            preproc = pipeline.named_steps['preprocessor']
+            clf = pipeline.named_steps['classifier']
+
+            if isinstance(clf, RandomForestClassifier):
+                X_train_transformed = preproc.transform(X_train)
+                clf.n_estimators += 25
+                clf.fit(X_train_transformed, y_train)
+                print(f"[Model manager] RF n_estimators = {pipeline.named_steps['classifier'].n_estimators}")
+
+            elif hasattr(clf, "partial_fit"):
+                X_train_transformed = preproc.transform(X_train)
+                clf.partial_fit(X_train_transformed, y_train, classes=np.unique(y))
+
+            results = self.evaluate(name, pipeline, X_test, y_test)
+            is_best = results['f1_score'] > self.best_score
+            if is_best:
+                self.best_score = results['f1_score']
+
+            self.save_model(name, pipeline, results, best=is_best)
+            os.unlink(model_path)
 
     def train_and_evaluate(self, data_path):
         """Обучение, валидация и сохранение метаданных"""
-        print(f"Начало этапа обучения на данных: {data_path}")
+        print(f"[Model manager] Начало этапа обучения на данных: {data_path}")
         df = pd.read_csv(data_path)
 
-        drop_cols = [self.target, 'INSR_BEGIN', 'INSR_END']
+        drop_cols = [self.target, 'CLAIM_PAID', 'INSR_BEGIN', 'INSR_END']
         X = df.drop(columns=[c for c in drop_cols if c in df.columns])
-        cat_cols = X.select_dtypes(include=['object', 'bool']).columns
+        cat_cols = X.select_dtypes(include=['object', 'bool', 'str']).columns
         for col in cat_cols:
             X[col] = X[col].astype(str)
         y = df[self.target]
@@ -189,13 +221,15 @@ class ModelManager:
         else:
             self._train_new_models(X, y)
 
-
-
     def predict(self, input_data_path):
         """Инференс (применение модели)"""
-        best_model_path = os.path.join(self.models_dir, "best_model.pkl")
-        if not os.path.exists(best_model_path):
+        try:
+            best_model_name = os.listdir(self.best_model_dir)[0]
+        except:
             return "Ошибка: Модель не найдена. Сначала запустите обучение (update)."
+        best_model_path = os.path.join(self.best_model_dir, best_model_name)
+        best_model_path = os.readlink(best_model_path)
+        print("[Model manager]", best_model_path)
 
         model = joblib.load(best_model_path)
         df = pd.read_csv(input_data_path)

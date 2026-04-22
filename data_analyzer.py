@@ -112,7 +112,7 @@ class DataAnalyzer:
         """
         Поиск ассоциативных правил для проверки корректности данных
         """
-        print("Поиск ассоциативных правил...")
+        print("[Analyze] Поиск ассоциативных правил...")
 
         # Подготовка данных для Apriori
         # Выбираем ключевые колонки и превращаем их в бинарные флаги
@@ -151,7 +151,7 @@ class DataAnalyzer:
             rule_str = f"{list(row['antecedents'])} -> {list(row['consequents'])} (conf: {row['confidence']:.2f})"
             formatted_rules.append(rule_str)
 
-        print(f"Найдено правил: {len(formatted_rules)}")
+        print(f"[Analyze] Найдено правил: {len(formatted_rules)}")
         return formatted_rules
 
     def analyze(self, file_path):
