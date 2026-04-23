@@ -1,4 +1,8 @@
 # Tmp files
+data/processed/
+data/raw/
+metadata/
+models/
 tmp.*
 
 # Byte-compiled / optimized / DLL files

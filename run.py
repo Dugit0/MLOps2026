@@ -17,7 +17,8 @@ def main():
                                           "inference",
                                           "summary",
                                           "clear",
-                                          "get_batch"])
+                                          "get_batch",
+                                          "get_train_metrics"])
     parser.add_argument("-file", type=str)
     args = parser.parse_args()
 

@@ -60,13 +60,12 @@ import glob
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import f1_score, accuracy_score
+from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 
-# from config import *
 import config
 import os
 
@@ -133,13 +132,11 @@ class ModelManager:
     def evaluate(self, name, pipeline, X_test, y_test):
         """Оценка качества обученной модели"""
         y_pred = pipeline.predict(X_test)
-        score = f1_score(y_test, y_pred)
         accur = accuracy_score(y_test, y_pred)
         results = {
-            "f1_score": score,
             "accuracy": accur,
         }
-        print(f"[Model manager] --- Модель {name}: F1 = {score:.4f} | Accuracy = {accur:.4f}")
+        print(f"[Model manager] Модель {name}: Accuracy = {accur:.4f}")
         return results
 
 
@@ -167,7 +164,7 @@ class ModelManager:
             ])
             pipeline.fit(X_train, y_train)
             results = self.evaluate(name, pipeline, X_test, y_test)
-            score = results['f1_score']
+            score = results['accuracy']
             self.save_model(name, pipeline, results, best=(score > self.best_score))
             self.best_score = max(self.best_score, score)
 
@@ -197,9 +194,9 @@ class ModelManager:
                 clf.partial_fit(X_train_transformed, y_train, classes=np.unique(y))
 
             results = self.evaluate(name, pipeline, X_test, y_test)
-            is_best = results['f1_score'] > self.best_score
+            is_best = results['accuracy'] > self.best_score
             if is_best:
-                self.best_score = results['f1_score']
+                self.best_score = results['accuracy']
 
             self.save_model(name, pipeline, results, best=is_best)
             os.unlink(model_path)
@@ -211,7 +208,8 @@ class ModelManager:
 
         drop_cols = [self.target, 'CLAIM_PAID', 'INSR_BEGIN', 'INSR_END']
         X = df.drop(columns=[c for c in drop_cols if c in df.columns])
-        cat_cols = X.select_dtypes(include=['object', 'bool', 'str']).columns
+        cat_cols = X.select_dtypes(include=['object', 'bool', 'str']).columns.tolist()
+        cat_cols += ['EFFECTIVE_YR', 'TYPE_VEHICLE', 'MAKE', 'USAGE']
         for col in cat_cols:
             X[col] = X[col].astype(str)
         y = df[self.target]
